@@ -40,12 +40,18 @@ input_mat_file = (
 csv_export_parent_folder = "/Users/stefan/UCDrive/A SR/experiments/data/stefan0424"
 
 # Does the main .mat recording already contain both NAcMed and NAcLat?
-# True: use sig/ref and sig2/ref2 from the main file.
+# True: use two signal/reference pairs from the .mat file.
 # False: the main .mat has one signal/reference pair; optionally add CSV below.
-main_file_has_two_regions = False
+mat_file_has_two_regions = False
 
-# If main_file_has_two_regions is False, use Fluorescence.csv / Events.csv as NAcLat.
+# Region identity of each .mat signal/reference pair, in raw channel order.
+# The .mat file always has NAcLat; some .mat files also contain NAcMed.
+mat_region_order = ("NAcLat", "NAcMed")
+
+# If mat_file_has_two_regions is False, add Fluorescence.csv / Events.csv.
+# The CSV export contains NAcMed.
 add_csv_as_second_region = True
+csv_region = "NAcMed"
 
 # Save processed data here. Leave as None for ./processed next to this script.
 processed_output_folder = None
@@ -55,10 +61,19 @@ show_overview_plot = False
 
 
 DAY_MAP = {
-    "04092026": "day1",
-    "04102026": "day2",
-    "04172026": "day3",
-    "04212026": "day4",
+    "04092026": 1,
+    "04102026": 2,
+    "04172026": 3,
+    "04212026": 4,
+    "04242026": 5,
+}
+
+ANIMAL_MAP = {
+    "Z267_1": 1,
+    "Z267_3": 2,
+    "Z267_7": 3,
+    "Z268_2": 4,
+    "Z268_4": 5,
 }
 
 LAT_COLOR = "#1171BE"
@@ -82,55 +97,51 @@ def main() -> None:
     filename2 = resolve_csv_folder(experiment_dir_path, filename_base, config["add_csv_as_second_region"])
 
     metadata = parse_metadata(filename_path)
-    plot_title = f"{metadata['animal']} - {metadata['day_label']} - {metadata['power']}"
+    plot_title = build_metadata_title(metadata)
 
     raw = load_raw_fip(filename_path)
     n_signal_pairs = min(len(raw.sig), len(raw.ref))
     if n_signal_pairs < 1:
         raise ValueError(f"No signal/reference pairs found in {filename_path}.")
-    if config["main_file_has_two_regions"] and n_signal_pairs < 2:
+    if config["mat_file_has_two_regions"] and n_signal_pairs < 2:
         raise ValueError(
-            f"main_file_has_two_regions is True, but {filename_path} only contains "
+            f"mat_file_has_two_regions is True, but {filename_path} only contains "
             f"{n_signal_pairs} signal/reference pair(s)."
         )
 
-    has_second_signal = bool(config["main_file_has_two_regions"])
+    mat_file_has_two_regions_config = bool(config["mat_file_has_two_regions"])
     load_unaligned_csv_signal = bool(
-        config["add_csv_as_second_region"] and not config["main_file_has_two_regions"]
+        config["add_csv_as_second_region"] and not mat_file_has_two_regions_config
     )
     has_aligned_csv_second_signal = False
     single_signal_region = "NAcLat"
     csv_time_alignment: dict[str, Any] = {}
 
     time = np.asarray(raw.time, dtype=float)
-    sig = np.asarray(raw.sig[0], dtype=float)
-    ref = np.asarray(raw.ref[0], dtype=float)
-    sig2 = np.full_like(sig, np.nan, dtype=float)
-    ref2 = np.full_like(ref, np.nan, dtype=float)
-    exp_curve2 = np.full_like(sig, np.nan, dtype=float)
-    zsc_exp2 = np.full_like(sig, np.nan, dtype=float)
+    region_data = empty_region_data(time)
+    n_mat_regions = 2 if mat_file_has_two_regions_config else 1
+    mat_regions = tuple(normalize_region_name(r) for r in config["mat_region_order"])
+    if len(mat_regions) < n_mat_regions:
+        raise ValueError("mat_region_order must name every .mat signal/reference pair used.")
 
-    if has_second_signal:
-        sig2 = np.asarray(raw.sig[1], dtype=float)
-        ref2 = np.asarray(raw.ref[1], dtype=float)
+    for channel_idx in range(n_mat_regions):
+        region = mat_regions[channel_idx]
+        if region not in region_data:
+            raise ValueError(f"Unsupported region in mat_region_order: {region}")
+        channel_sig = np.asarray(raw.sig[channel_idx], dtype=float)
+        channel_ref = np.asarray(raw.ref[channel_idx], dtype=float)
+        channel_exp_curve = fit_exp2_curve(time, channel_sig)
+        channel_zsc = zscore_after(channel_sig - channel_exp_curve, time, skip_s=0.5)
+        region_data[region] = {
+            "sig": channel_sig,
+            "ref": channel_ref,
+            "exp_curve": channel_exp_curve,
+            "zsc": channel_zsc,
+            "source": f"mat_channel_{channel_idx + 1}",
+        }
 
-    exp_curve = fit_exp2_curve(time, sig)
-    sig_cor = sig - exp_curve
-    zsc_exp = zscore_after(sig_cor, time, skip_s=0.5)
-
-    if has_second_signal:
-        exp_curve2 = fit_exp2_curve(time, sig2)
-        sig_cor2 = sig2 - exp_curve2
-        zsc_exp2 = zscore_after(sig_cor2, time, skip_s=0.5)
-
-    if not has_second_signal and not load_unaligned_csv_signal:
-        sig2 = sig
-        ref2 = ref
-        exp_curve2 = exp_curve
-        zsc_exp2 = zsc_exp
-        sig = np.full_like(sig2, np.nan, dtype=float)
-        ref = np.full_like(ref2, np.nan, dtype=float)
-        zsc_exp = np.full_like(zsc_exp2, np.nan, dtype=float)
+    exp_curve = region_data["NAcMed"]["exp_curve"]
+    exp_curve2 = region_data["NAcLat"]["exp_curve"]
 
     if raw.logai is None or raw.logai.shape[1] < 2:
         raise ValueError(f"No usable logAI TTL channel found for {filename_path}.")
@@ -144,20 +155,20 @@ def main() -> None:
     T = pd.DataFrame(
         {
             "time": time,
-            "sig": sig,
-            "ref": ref,
-            "sig2": sig2,
-            "ref2": ref2,
+            "sig": region_data["NAcMed"]["sig"],
+            "ref": region_data["NAcMed"]["ref"],
+            "sig2": region_data["NAcLat"]["sig"],
+            "ref2": region_data["NAcLat"]["ref"],
             "ttl": ttl,
-            "zsc_exp": zsc_exp,
-            "zsc_exp2": zsc_exp2,
+            "zsc_exp": region_data["NAcMed"]["zsc"],
+            "zsc_exp2": region_data["NAcLat"]["zsc"],
         }
     )
 
     T_csv = pd.DataFrame()
     T_events_csv = pd.DataFrame()
-    if config["add_csv_as_second_region"] and config["main_file_has_two_regions"]:
-        print("Skipping CSV second-region loading because main_file_has_two_regions is True.")
+    if config["add_csv_as_second_region"] and mat_file_has_two_regions_config:
+        print("Skipping CSV second-region loading because mat_file_has_two_regions is True.")
 
     if load_unaligned_csv_signal:
         T_csv, T_events_csv = load_unaligned_csv_signal_tables(filename2)
@@ -201,16 +212,23 @@ def main() -> None:
         T_events_csv.loc[T_events_csv.index[:n_paired], "time_error_s"] = csv_alignment_error_s
         T_events_csv.loc[T_events_csv.index[:n_paired], "time_error_ms"] = csv_alignment_error_ms
 
-        T["sig2"] = interp_linear_nan(T_csv["time_aligned"], T_csv["sig"], T["time"])
-        T["ref2"] = interp_linear_nan(T_csv["time_aligned"], T_csv["ref"], T["time"])
-        T["zsc_exp2"] = interp_linear_nan(T_csv["time_aligned"], T_csv["zsc_exp"], T["time"])
-        exp_curve2 = interp_linear_nan(T_csv["time_aligned"], T_csv["exp_curve"], T["time"])
-
-        sig2 = T["sig2"].to_numpy()
-        ref2 = T["ref2"].to_numpy()
-        zsc_exp2 = T["zsc_exp2"].to_numpy()
+        csv_region_name = normalize_region_name(config["csv_region"])
+        if csv_region_name == "NAcMed":
+            T["sig"] = interp_linear_nan(T_csv["time_aligned"], T_csv["sig"], T["time"])
+            T["ref"] = interp_linear_nan(T_csv["time_aligned"], T_csv["ref"], T["time"])
+            T["zsc_exp"] = interp_linear_nan(T_csv["time_aligned"], T_csv["zsc_exp"], T["time"])
+            exp_curve = interp_linear_nan(T_csv["time_aligned"], T_csv["exp_curve"], T["time"])
+            region_data["NAcMed"]["source"] = "csv"
+        elif csv_region_name == "NAcLat":
+            T["sig2"] = interp_linear_nan(T_csv["time_aligned"], T_csv["sig"], T["time"])
+            T["ref2"] = interp_linear_nan(T_csv["time_aligned"], T_csv["ref"], T["time"])
+            T["zsc_exp2"] = interp_linear_nan(T_csv["time_aligned"], T_csv["zsc_exp"], T["time"])
+            exp_curve2 = interp_linear_nan(T_csv["time_aligned"], T_csv["exp_curve"], T["time"])
+            region_data["NAcLat"]["source"] = "csv"
+        else:
+            raise ValueError(f"Unsupported csv_region: {config['csv_region']}")
         has_aligned_csv_second_signal = True
-        has_second_signal = True
+        has_second_signal = has_valid_trace(T["zsc_exp"]) and has_valid_trace(T["zsc_exp2"])
 
         csv_time_alignment = {
             "slope": float(csv_time_slope),
@@ -224,11 +242,17 @@ def main() -> None:
         }
         abs_error = np.abs(csv_alignment_error_ms[np.isfinite(csv_alignment_error_ms)])
         if len(abs_error):
-            print(f"Aligned CSV signal from {filename2} into T.sig2/ref2/zsc_exp2")
+            if csv_region_name == "NAcMed":
+                csv_target = "T.sig/ref/zsc_exp"
+            else:
+                csv_target = "T.sig2/ref2/zsc_exp2"
+            print(f"Aligned CSV signal from {filename2} into {csv_target}")
             print(
                 "CSV TTL alignment error: "
                 f"median {np.median(abs_error):.3f} ms, max abs {np.max(abs_error):.3f} ms"
             )
+
+    has_second_signal = has_valid_trace(T["zsc_exp"]) and has_valid_trace(T["zsc_exp2"])
 
     session_out_dir = out_dir_path / filename_base
     session_out_dir.mkdir(parents=True, exist_ok=True)
@@ -240,14 +264,19 @@ def main() -> None:
 
     metadata.update(
         {
-            "day_index": day_index_from_label(metadata["day_label"]),
             "filename": str(filename_path),
             "filename_base": filename_base,
             "fip_loader_source": raw.source,
-            "main_file_has_two_regions": bool(config["main_file_has_two_regions"]),
+            "mat_file_has_two_regions": bool(config["mat_file_has_two_regions"]),
+            "mat_region_order": list(mat_regions),
             "has_second_signal": bool(has_second_signal),
             "single_signal_region": single_signal_region,
             "add_csv_as_second_region": bool(config["add_csv_as_second_region"]),
+            "csv_region": normalize_region_name(config["csv_region"]),
+            "region_sources": {
+                "NAcMed": region_data["NAcMed"]["source"],
+                "NAcLat": region_data["NAcLat"]["source"],
+            },
             "filename2": str(filename2),
             "has_unaligned_second_signal": bool(load_unaligned_csv_signal),
             "has_aligned_csv_second_signal": bool(has_aligned_csv_second_signal),
@@ -287,12 +316,16 @@ def get_run_config() -> dict[str, Any]:
         "processed_output_folder": args.processed_output_folder
         if args.processed_output_folder is not None
         else processed_output_folder,
-        "main_file_has_two_regions": args.main_file_has_two_regions
-        if args.main_file_has_two_regions is not None
-        else main_file_has_two_regions,
+        "mat_file_has_two_regions": args.mat_file_has_two_regions
+        if args.mat_file_has_two_regions is not None
+        else mat_file_has_two_regions,
+        "mat_region_order": tuple(args.mat_region_order)
+        if args.mat_region_order is not None
+        else tuple(mat_region_order),
         "add_csv_as_second_region": args.add_csv_as_second_region
         if args.add_csv_as_second_region is not None
         else add_csv_as_second_region,
+        "csv_region": args.csv_region if args.csv_region is not None else csv_region,
         "show_overview_plot": args.show_overview_plot
         if args.show_overview_plot is not None
         else show_overview_plot,
@@ -315,12 +348,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
     )
     parser.add_argument(
+        "--mat-file-has-two-regions",
         "--main-file-has-two-regions",
         "--two-signals",
-        dest="main_file_has_two_regions",
+        dest="mat_file_has_two_regions",
         action=argparse.BooleanOptionalAction,
         default=None,
     )
+    parser.add_argument("--mat-region-order", nargs="+", default=None)
     parser.add_argument(
         "--add-csv-as-second-region",
         "--csv-second-signal",
@@ -328,6 +363,7 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=None,
     )
+    parser.add_argument("--csv-region", default=None)
     parser.add_argument(
         "--show-overview-plot",
         "--show-overview",
@@ -341,21 +377,95 @@ def parse_args() -> argparse.Namespace:
 def parse_metadata(filename: Path) -> dict[str, str]:
     fname = filename.stem
     animal_match = re.search(r"^([A-Z0-9_]+\d+)_", fname)
-    power_match = re.search(r"_(\d+-\d+)mW_", fname)
+    power_match = re.search(r"_(\d+(?:-\d+)?)mW_", fname)
     date_match = re.search(r"_(\d{8})$", fname)
     date_str = date_match.group(1) if date_match else ""
     power = f"{power_match.group(1).replace('-', '.')}mW" if power_match else ""
+    raw_animal = animal_match.group(1) if animal_match else ""
+    animal = map_or_keep(raw_animal, ANIMAL_MAP, "animal")
+    day_index = map_day_index(date_str)
     return {
-        "animal": animal_match.group(1) if animal_match else "",
+        "animal": animal,
+        "raw_animal": raw_animal,
         "power": power,
         "date": date_str,
-        "day_label": DAY_MAP.get(date_str, date_str),
+        "day_index": day_index,
+        "day_label": day_label_from_index(day_index),
     }
 
 
-def day_index_from_label(day_label: str) -> int:
-    match = re.fullmatch(r"day(\d+)", str(day_label))
-    return int(match.group(1)) if match else 1
+def build_metadata_title(metadata: dict[str, Any]) -> str:
+    mouse_name = metadata.get("raw_animal") or metadata.get("animal") or ""
+    animal_number = metadata.get("animal", "")
+    date = metadata.get("date", "")
+    day_index = metadata.get("day_index", "")
+    day_text = f"day {day_index}" if day_index not in ("", None) else ""
+    power = metadata.get("power", "")
+    parts = [
+        f"mouse {mouse_name}" if mouse_name else "",
+        f"animal {animal_number}" if animal_number not in ("", None) else "",
+        f"date {date}" if date else "",
+        day_text,
+        power,
+    ]
+    return " - ".join(str(part) for part in parts if part)
+
+
+def map_or_keep(value: str, mapping: dict[str, Any], label: str) -> Any:
+    if not value:
+        return ""
+    if value in mapping:
+        return mapping[value]
+    print(f"Warning: {label} '{value}' is not in map; using raw value.")
+    return value
+
+
+def map_day_index(date_str: str) -> int | None:
+    if not date_str:
+        return None
+    if date_str in DAY_MAP:
+        return DAY_MAP[date_str]
+    print(f"Warning: date '{date_str}' is not in DAY_MAP; day_index will be None.")
+    return None
+
+
+def day_label_from_index(day_index: int | None) -> str:
+    if day_index is None:
+        return "unmapped_day"
+    return f"day{day_index}"
+
+
+def empty_region_data(time: np.ndarray) -> dict[str, dict[str, Any]]:
+    def empty_channel() -> dict[str, Any]:
+        return {
+            "sig": np.full_like(time, np.nan, dtype=float),
+            "ref": np.full_like(time, np.nan, dtype=float),
+            "exp_curve": np.full_like(time, np.nan, dtype=float),
+            "zsc": np.full_like(time, np.nan, dtype=float),
+            "source": None,
+        }
+
+    return {"NAcMed": empty_channel(), "NAcLat": empty_channel()}
+
+
+def normalize_region_name(region: str) -> str:
+    cleaned = str(region).strip().lower().replace("-", "").replace("_", "")
+    aliases = {
+        "nacmed": "NAcMed",
+        "med": "NAcMed",
+        "nacmedial": "NAcMed",
+        "naclat": "NAcLat",
+        "lat": "NAcLat",
+        "naclateral": "NAcLat",
+    }
+    if cleaned not in aliases:
+        raise ValueError(f"Unknown region name: {region}. Use NAcMed or NAcLat.")
+    return aliases[cleaned]
+
+
+def has_valid_trace(trace: pd.Series | np.ndarray) -> bool:
+    values = np.asarray(trace, dtype=float)
+    return bool(np.any(np.isfinite(values)))
 
 
 def resolve_csv_folder(experiment_dir: Path, filename_base: str, enabled: bool) -> Path:
@@ -604,20 +714,55 @@ def plot_overview(
         axes[row].set_ylabel("Z-score NAcLat")
         row += 1
 
-    axes[row].plot(time, primary_zsc, color=primary_color, lw=0.8)
-    axes[row].plot(time, primary_ref, color="0.5", lw=0.6)
-    axes[row].plot(time, rescale(ttl, primary_ref), color="k", lw=0.4)
-    axes[row].set_ylabel(primary_label)
+    plot_signal_ref_ttl_panel(
+        axes[row],
+        time,
+        primary_zsc,
+        primary_ref,
+        ttl,
+        primary_color,
+        primary_label,
+    )
     row += 1
 
     if has_second_signal:
-        axes[row].plot(time, T["zsc_exp2"], color=LAT_COLOR, lw=0.8)
-        axes[row].plot(time, T["ref2"], color="0.5", lw=0.6)
-        axes[row].plot(time, rescale(ttl, T["ref2"].to_numpy()), color="k", lw=0.4)
-        axes[row].set_ylabel("NAcLat")
+        plot_signal_ref_ttl_panel(
+            axes[row],
+            time,
+            T["zsc_exp2"].to_numpy(),
+            T["ref2"].to_numpy(),
+            ttl,
+            LAT_COLOR,
+            "NAcLat",
+        )
 
     axes[-1].set_xlabel("Time (s)")
     fig.suptitle(plot_title)
+
+
+def plot_signal_ref_ttl_panel(
+    ax_signal: plt.Axes,
+    time: np.ndarray,
+    zsc_trace: np.ndarray,
+    reference_trace: np.ndarray,
+    ttl: np.ndarray,
+    signal_color: str,
+    signal_label: str,
+) -> None:
+    ax_ref = ax_signal.twinx()
+    signal_line = ax_signal.plot(time, zsc_trace, color=signal_color, lw=0.8, label=signal_label)
+    ref_line = ax_ref.plot(time, reference_trace, color="0.45", lw=0.6, label="Reference")
+    ttl_line = ax_ref.plot(time, rescale(ttl, reference_trace), color="k", lw=0.4, label="TTL")
+
+    ax_signal.set_ylabel(f"{signal_label} z-score", color=signal_color)
+    ax_ref.set_ylabel("Reference / TTL", color="0.35")
+    ax_signal.tick_params(axis="y", colors=signal_color)
+    ax_ref.tick_params(axis="y", colors="0.35")
+    ax_signal.spines["left"].set_color(signal_color)
+    ax_ref.spines["right"].set_color("0.35")
+
+    lines = signal_line + ref_line + ttl_line
+    ax_signal.legend(lines, [line.get_label() for line in lines], loc="best", fontsize=8)
 
 
 def rescale(values: np.ndarray, target: np.ndarray) -> np.ndarray:
