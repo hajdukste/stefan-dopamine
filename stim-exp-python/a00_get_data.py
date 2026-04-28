@@ -30,27 +30,28 @@ except ImportError:  # pragma: no cover - supports package-style import
 # Parameters
 #--------------------------------------------------------------------------
 # Edit these values and run the whole file, the same way as the MATLAB script.
-filename = (
+input_mat_file = (
     "/Users/stefan/UCDrive/A SR/experiments/data/stefan0424/"
     "Z268_2_NAcMed-D1-MSN-axon-activation_10mW_7-pattern_n10_04242026.mat"
 )
 
-# Leave as None to use the folder containing filename.
-experiment_dir = "/Users/stefan/UCDrive/A SR/experiments/data/stefan0424"
+# Folder that contains the matching Fluorescence.csv / Events.csv export folder.
+# Leave as None to use the folder containing input_mat_file.
+csv_export_parent_folder = "/Users/stefan/UCDrive/A SR/experiments/data/stefan0424"
 
-# NAcLat & NAcMed.
+# Does the main .mat recording already contain both NAcMed and NAcLat?
 # True: use sig/ref and sig2/ref2 from the main file.
-# False: use a single NAcLat pair from the main file.
-two_signals_true = False
+# False: the main .mat has one signal/reference pair; optionally add CSV below.
+main_file_has_two_regions = False
 
-# If two_signals_true is false, use Fluorescence.csv / Events.csv as a second signal.
-use_as_a_second_csv_files = True
+# If main_file_has_two_regions is False, use Fluorescence.csv / Events.csv as NAcLat.
+add_csv_as_second_region = True
 
 # Save processed data here. Leave as None for ./processed next to this script.
-out_dir = None
+processed_output_folder = None
 
 # Show the overview diagnostic plot after saving.
-show_overview = False
+show_overview_plot = False
 
 
 DAY_MAP = {
@@ -66,19 +67,19 @@ MED_COLOR = "#DD5400"
 
 def main() -> None:
     config = get_run_config()
-    filename_path = Path(config["filename"]).expanduser()
+    filename_path = Path(config["input_mat_file"]).expanduser()
     experiment_dir_path = (
-        Path(config["experiment_dir"]).expanduser()
-        if config["experiment_dir"] is not None
+        Path(config["csv_export_parent_folder"]).expanduser()
+        if config["csv_export_parent_folder"] is not None
         else filename_path.parent
     )
     out_dir_path = (
-        Path(config["out_dir"]).expanduser()
-        if config["out_dir"] is not None
+        Path(config["processed_output_folder"]).expanduser()
+        if config["processed_output_folder"] is not None
         else Path(__file__).resolve().parent / "processed"
     )
     filename_base = filename_path.stem
-    filename2 = resolve_csv_folder(experiment_dir_path, filename_base, config["use_as_a_second_csv_files"])
+    filename2 = resolve_csv_folder(experiment_dir_path, filename_base, config["add_csv_as_second_region"])
 
     metadata = parse_metadata(filename_path)
     plot_title = f"{metadata['animal']} - {metadata['day_label']} - {metadata['power']}"
@@ -87,15 +88,15 @@ def main() -> None:
     n_signal_pairs = min(len(raw.sig), len(raw.ref))
     if n_signal_pairs < 1:
         raise ValueError(f"No signal/reference pairs found in {filename_path}.")
-    if config["two_signals_true"] and n_signal_pairs < 2:
+    if config["main_file_has_two_regions"] and n_signal_pairs < 2:
         raise ValueError(
-            f"two_signals_true is True, but {filename_path} only contains "
+            f"main_file_has_two_regions is True, but {filename_path} only contains "
             f"{n_signal_pairs} signal/reference pair(s)."
         )
 
-    has_second_signal = bool(config["two_signals_true"])
+    has_second_signal = bool(config["main_file_has_two_regions"])
     load_unaligned_csv_signal = bool(
-        config["use_as_a_second_csv_files"] and not config["two_signals_true"]
+        config["add_csv_as_second_region"] and not config["main_file_has_two_regions"]
     )
     has_aligned_csv_second_signal = False
     single_signal_region = "NAcLat"
@@ -155,8 +156,8 @@ def main() -> None:
 
     T_csv = pd.DataFrame()
     T_events_csv = pd.DataFrame()
-    if config["use_as_a_second_csv_files"] and config["two_signals_true"]:
-        print("Skipping CSV second-signal loading because two_signals_true is True.")
+    if config["add_csv_as_second_region"] and config["main_file_has_two_regions"]:
+        print("Skipping CSV second-region loading because main_file_has_two_regions is True.")
 
     if load_unaligned_csv_signal:
         T_csv, T_events_csv = load_unaligned_csv_signal_tables(filename2)
@@ -243,10 +244,10 @@ def main() -> None:
             "filename": str(filename_path),
             "filename_base": filename_base,
             "fip_loader_source": raw.source,
-            "two_signals_true": bool(config["two_signals_true"]),
+            "main_file_has_two_regions": bool(config["main_file_has_two_regions"]),
             "has_second_signal": bool(has_second_signal),
             "single_signal_region": single_signal_region,
-            "use_as_a_second_csv_files": bool(config["use_as_a_second_csv_files"]),
+            "add_csv_as_second_region": bool(config["add_csv_as_second_region"]),
             "filename2": str(filename2),
             "has_unaligned_second_signal": bool(load_unaligned_csv_signal),
             "has_aligned_csv_second_signal": bool(has_aligned_csv_second_signal),
@@ -261,7 +262,7 @@ def main() -> None:
         f"to {session_out_dir}"
     )
 
-    if config["show_overview"]:
+    if config["show_overview_plot"]:
         plot_overview(
             T,
             exp_curve,
@@ -279,27 +280,61 @@ def main() -> None:
 def get_run_config() -> dict[str, Any]:
     args = parse_args()
     return {
-        "filename": args.filename if args.filename is not None else filename,
-        "experiment_dir": args.experiment_dir if args.experiment_dir is not None else experiment_dir,
-        "out_dir": args.out_dir if args.out_dir is not None else out_dir,
-        "two_signals_true": args.two_signals
-        if args.two_signals is not None
-        else two_signals_true,
-        "use_as_a_second_csv_files": args.csv_second_signal
-        if args.csv_second_signal is not None
-        else use_as_a_second_csv_files,
-        "show_overview": args.show_overview if args.show_overview is not None else show_overview,
+        "input_mat_file": args.input_mat_file if args.input_mat_file is not None else input_mat_file,
+        "csv_export_parent_folder": args.csv_export_parent_folder
+        if args.csv_export_parent_folder is not None
+        else csv_export_parent_folder,
+        "processed_output_folder": args.processed_output_folder
+        if args.processed_output_folder is not None
+        else processed_output_folder,
+        "main_file_has_two_regions": args.main_file_has_two_regions
+        if args.main_file_has_two_regions is not None
+        else main_file_has_two_regions,
+        "add_csv_as_second_region": args.add_csv_as_second_region
+        if args.add_csv_as_second_region is not None
+        else add_csv_as_second_region,
+        "show_overview_plot": args.show_overview_plot
+        if args.show_overview_plot is not None
+        else show_overview_plot,
     }
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--filename", default=None)
-    parser.add_argument("--experiment-dir", default=None)
-    parser.add_argument("--out-dir", default=None)
-    parser.add_argument("--two-signals", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--csv-second-signal", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--show-overview", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--input-mat-file", "--filename", dest="input_mat_file", default=None)
+    parser.add_argument(
+        "--csv-export-parent-folder",
+        "--experiment-dir",
+        dest="csv_export_parent_folder",
+        default=None,
+    )
+    parser.add_argument(
+        "--processed-output-folder",
+        "--out-dir",
+        dest="processed_output_folder",
+        default=None,
+    )
+    parser.add_argument(
+        "--main-file-has-two-regions",
+        "--two-signals",
+        dest="main_file_has_two_regions",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument(
+        "--add-csv-as-second-region",
+        "--csv-second-signal",
+        dest="add_csv_as_second_region",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
+    parser.add_argument(
+        "--show-overview-plot",
+        "--show-overview",
+        dest="show_overview_plot",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+    )
     return parser.parse_args()
 
 

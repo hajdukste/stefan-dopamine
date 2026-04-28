@@ -26,6 +26,15 @@ workspace.
 Edit the parameter block at the top of `a00_get_data.py`, then run the whole
 file:
 
+```python
+input_mat_file = "..."
+csv_export_parent_folder = "..."
+main_file_has_two_regions = False
+add_csv_as_second_region = True
+processed_output_folder = None
+show_overview_plot = False
+```
+
 ```bash
 /opt/anaconda3/envs/py312/bin/python a00_get_data.py
 /opt/anaconda3/envs/py312/bin/python a02_session_heatmap_psth.py --two-signals --no-show --save session_psth.png
