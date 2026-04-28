@@ -26,10 +26,32 @@ except ImportError:  # pragma: no cover - supports package-style import
     from .fipster_io import load_raw_fip
 
 
-DEFAULT_FILENAME = (
+#--------------------------------------------------------------------------
+# Parameters
+#--------------------------------------------------------------------------
+# Edit these values and run the whole file, the same way as the MATLAB script.
+filename = (
     "/Users/stefan/UCDrive/A SR/experiments/data/stefan0424/"
     "Z268_2_NAcMed-D1-MSN-axon-activation_10mW_7-pattern_n10_04242026.mat"
 )
+
+# Leave as None to use the folder containing filename.
+experiment_dir = "/Users/stefan/UCDrive/A SR/experiments/data/stefan0424"
+
+# NAcLat & NAcMed.
+# True: use sig/ref and sig2/ref2 from the main file.
+# False: use a single NAcLat pair from the main file.
+two_signals_true = False
+
+# If two_signals_true is false, use Fluorescence.csv / Events.csv as a second signal.
+use_as_a_second_csv_files = True
+
+# Save processed data here. Leave as None for ./processed next to this script.
+out_dir = None
+
+# Show the overview diagnostic plot after saving.
+show_overview = False
+
 
 DAY_MAP = {
     "04092026": "day1",
@@ -43,27 +65,38 @@ MED_COLOR = "#DD5400"
 
 
 def main() -> None:
-    args = parse_args()
-    filename = Path(args.filename).expanduser()
-    experiment_dir = Path(args.experiment_dir).expanduser() if args.experiment_dir else filename.parent
-    filename_base = filename.stem
-    filename2 = resolve_csv_folder(experiment_dir, filename_base, args.csv_second_signal)
+    config = get_run_config()
+    filename_path = Path(config["filename"]).expanduser()
+    experiment_dir_path = (
+        Path(config["experiment_dir"]).expanduser()
+        if config["experiment_dir"] is not None
+        else filename_path.parent
+    )
+    out_dir_path = (
+        Path(config["out_dir"]).expanduser()
+        if config["out_dir"] is not None
+        else Path(__file__).resolve().parent / "processed"
+    )
+    filename_base = filename_path.stem
+    filename2 = resolve_csv_folder(experiment_dir_path, filename_base, config["use_as_a_second_csv_files"])
 
-    metadata = parse_metadata(filename)
+    metadata = parse_metadata(filename_path)
     plot_title = f"{metadata['animal']} - {metadata['day_label']} - {metadata['power']}"
 
-    raw = load_raw_fip(filename)
+    raw = load_raw_fip(filename_path)
     n_signal_pairs = min(len(raw.sig), len(raw.ref))
     if n_signal_pairs < 1:
-        raise ValueError(f"No signal/reference pairs found in {filename}.")
-    if args.two_signals and n_signal_pairs < 2:
+        raise ValueError(f"No signal/reference pairs found in {filename_path}.")
+    if config["two_signals_true"] and n_signal_pairs < 2:
         raise ValueError(
-            f"--two-signals was set, but {filename} only contains {n_signal_pairs} "
-            "signal/reference pair(s)."
+            f"two_signals_true is True, but {filename_path} only contains "
+            f"{n_signal_pairs} signal/reference pair(s)."
         )
 
-    has_second_signal = bool(args.two_signals)
-    load_unaligned_csv_signal = bool(args.csv_second_signal and not args.two_signals)
+    has_second_signal = bool(config["two_signals_true"])
+    load_unaligned_csv_signal = bool(
+        config["use_as_a_second_csv_files"] and not config["two_signals_true"]
+    )
     has_aligned_csv_second_signal = False
     single_signal_region = "NAcLat"
     csv_time_alignment: dict[str, Any] = {}
@@ -99,7 +132,7 @@ def main() -> None:
         zsc_exp = np.full_like(zsc_exp2, np.nan, dtype=float)
 
     if raw.logai is None or raw.logai.shape[1] < 2:
-        raise ValueError(f"No usable logAI TTL channel found for {filename}.")
+        raise ValueError(f"No usable logAI TTL channel found for {filename_path}.")
     ttl = interpolate_nearest(
         raw.logai.iloc[:, 0].to_numpy(dtype=float),
         raw.logai.iloc[:, 1].to_numpy(dtype=float),
@@ -122,8 +155,8 @@ def main() -> None:
 
     T_csv = pd.DataFrame()
     T_events_csv = pd.DataFrame()
-    if args.csv_second_signal and args.two_signals:
-        print("Skipping CSV second-signal loading because --two-signals is set.")
+    if config["use_as_a_second_csv_files"] and config["two_signals_true"]:
+        print("Skipping CSV second-signal loading because two_signals_true is True.")
 
     if load_unaligned_csv_signal:
         T_csv, T_events_csv = load_unaligned_csv_signal_tables(filename2)
@@ -196,39 +229,39 @@ def main() -> None:
                 f"median {np.median(abs_error):.3f} ms, max abs {np.max(abs_error):.3f} ms"
             )
 
-    out_dir = Path(args.out_dir).expanduser() / filename_base
-    out_dir.mkdir(parents=True, exist_ok=True)
-    T.to_parquet(out_dir / "T.parquet", index=False)
-    T_events.to_parquet(out_dir / "T_events.parquet", index=False)
+    session_out_dir = out_dir_path / filename_base
+    session_out_dir.mkdir(parents=True, exist_ok=True)
+    T.to_parquet(session_out_dir / "T.parquet", index=False)
+    T_events.to_parquet(session_out_dir / "T_events.parquet", index=False)
     if load_unaligned_csv_signal:
-        T_csv.to_parquet(out_dir / "T_csv.parquet", index=False)
-        T_events_csv.to_parquet(out_dir / "T_events_csv.parquet", index=False)
+        T_csv.to_parquet(session_out_dir / "T_csv.parquet", index=False)
+        T_events_csv.to_parquet(session_out_dir / "T_events_csv.parquet", index=False)
 
     metadata.update(
         {
             "day_index": day_index_from_label(metadata["day_label"]),
-            "filename": str(filename),
+            "filename": str(filename_path),
             "filename_base": filename_base,
             "fip_loader_source": raw.source,
-            "two_signals_true": bool(args.two_signals),
+            "two_signals_true": bool(config["two_signals_true"]),
             "has_second_signal": bool(has_second_signal),
             "single_signal_region": single_signal_region,
-            "use_as_a_second_csv_files": bool(args.csv_second_signal),
+            "use_as_a_second_csv_files": bool(config["use_as_a_second_csv_files"]),
             "filename2": str(filename2),
             "has_unaligned_second_signal": bool(load_unaligned_csv_signal),
             "has_aligned_csv_second_signal": bool(has_aligned_csv_second_signal),
             "csv_time_alignment": csv_time_alignment,
-            "processed_dir": str(out_dir),
+            "processed_dir": str(session_out_dir),
         }
     )
-    (out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    (session_out_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
 
     print(
         f"Saved {metadata['animal']} - {metadata['day_label']} - {metadata['power']} "
-        f"to {out_dir}"
+        f"to {session_out_dir}"
     )
 
-    if args.show_overview:
+    if config["show_overview"]:
         plot_overview(
             T,
             exp_curve,
@@ -243,14 +276,30 @@ def main() -> None:
         plt.show()
 
 
+def get_run_config() -> dict[str, Any]:
+    args = parse_args()
+    return {
+        "filename": args.filename if args.filename is not None else filename,
+        "experiment_dir": args.experiment_dir if args.experiment_dir is not None else experiment_dir,
+        "out_dir": args.out_dir if args.out_dir is not None else out_dir,
+        "two_signals_true": args.two_signals
+        if args.two_signals is not None
+        else two_signals_true,
+        "use_as_a_second_csv_files": args.csv_second_signal
+        if args.csv_second_signal is not None
+        else use_as_a_second_csv_files,
+        "show_overview": args.show_overview if args.show_overview is not None else show_overview,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--filename", default=DEFAULT_FILENAME)
+    parser.add_argument("--filename", default=None)
     parser.add_argument("--experiment-dir", default=None)
-    parser.add_argument("--out-dir", default=str(Path(__file__).resolve().parent / "processed"))
-    parser.add_argument("--two-signals", action="store_true")
-    parser.add_argument("--csv-second-signal", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--show-overview", action="store_true")
+    parser.add_argument("--out-dir", default=None)
+    parser.add_argument("--two-signals", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--csv-second-signal", action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument("--show-overview", action=argparse.BooleanOptionalAction, default=None)
     return parser.parse_args()
 
 

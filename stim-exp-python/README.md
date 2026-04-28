@@ -23,9 +23,15 @@ workspace.
 
 ## Example
 
+Edit the parameter block at the top of `a00_get_data.py`, then run the whole
+file:
+
 ```bash
 /opt/anaconda3/envs/py312/bin/python a00_get_data.py
 /opt/anaconda3/envs/py312/bin/python a02_session_heatmap_psth.py --two-signals --no-show --save session_psth.png
 ```
+
+Command-line arguments are still available as temporary overrides, but the
+intended workflow is to edit the script header just like the MATLAB version.
 
 Processed outputs are written to `processed/<session-name>/` by default.
