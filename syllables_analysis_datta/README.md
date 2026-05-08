@@ -34,3 +34,5 @@ These files are working analysis scripts, not a packaged MATLAB toolbox. They ar
 The main loaded container is `all_data(animal).data(day)`. Frame-aligned continuous data is usually in `.d`, discrete event records are usually in `.d_old`, corrected photometry is usually `d.zsc_exp`, and syllable IDs are in `d.syllable`.
 
 The source data are saved on Synology at `abstract_cue_project/Datta collaboration`.
+
+To use the MATLAB analysis scripts with the prepared dataset, load `all_data_0408.mat` from Synology and then run `a00_process_data.m`.
