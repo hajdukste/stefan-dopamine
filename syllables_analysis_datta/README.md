@@ -19,7 +19,7 @@ These files are working analysis scripts, not a packaged MATLAB toolbox. They ar
 - Files starting with `v` are video or GUI scripts.
 - `src_m/` contains helper functions used by the interactive plot player.
 
-## Listed Scripts
+## Main Scripts
 
 - `b01_beh_analysis.m` plots behavioral performance of mice, including trial counts per day and mean trial duration summaries.
 - `c01b_advanced_motif_coverage.m` plots common syllable/motif summaries, including a most-common syllables histogram and related speed/FIP motif summaries.
@@ -29,19 +29,10 @@ These files are working analysis scripts, not a packaged MATLAB toolbox. They ar
 - `p01_plot_main.m` opens an interactive long-timescale trace and behavior plot player.
 - `v01_video_gui.m` opens a synchronized video GUI with syllable overlays, tracking trail, dopamine trace, and trial event markers.
 
-## Renamed Figure Helpers
-
-Several figure files were renamed to make the GitHub project easier to navigate:
-
-- `f01_plot_syllable_psth_summary.m` builds multi-panel syllable PSTH summaries.
-- `f01_plot_syllable_psth_split_summary.m` compares syllables across split groups such as trial versus outside-trial bouts.
-- `f01_plot_syllable_onset_heatmap_summary.m` builds heatmap-style syllable onset summaries.
-- `f01_helper_*` files provide reusable PSTH event extraction, alignment, aggregation, and plotting helpers.
-- `f11b_plot_clustered_trial_syllable_sequences.m` plots syllable sequences grouped by clustered trial trajectories.
-- `f11c_plot_trial_syllable_occurrences.m` plots selected syllable occurrences within trials across days or animals.
-
 ## Data Notes
 
 The main loaded container is `all_data(animal).data(day)`. Frame-aligned continuous data is usually in `.d`, discrete event records are usually in `.d_old`, corrected photometry is usually `d.zsc_exp`, and syllable IDs are in `d.syllable`.
+
+The source data are saved on Synology at `abstract_cue_project/Datta collaboration`.
 
 Large `.mat` data files are intentionally excluded from this repository.
