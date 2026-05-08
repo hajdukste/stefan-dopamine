@@ -5,6 +5,12 @@ __pycache__/
 
 # Generated analysis output
 processed/
+exports/
+all_data_python_export/
+images/
+figures/
+*.mat
+*.fig
 *.png
 *.pdf
 *.svg
